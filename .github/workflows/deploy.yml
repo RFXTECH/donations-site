@@ -38,6 +38,6 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./workspace/donations-site
+          context: .
           push: true
           tags: ${{ steps.lowercase.outputs.target_image }}:latest
