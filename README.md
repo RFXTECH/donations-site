@@ -28,3 +28,4 @@ The deployment is fully automated using GitHub Actions and Keel:
 
 ## 🌐 Access
 The application is publicly accessible at: **[https://donations.rfox.net](https://donations.rfox.net)**
+# Triggering rebuild
