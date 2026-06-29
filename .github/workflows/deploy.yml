@@ -24,6 +24,7 @@ jobs:
         run: |
           LOW_NAME=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
           echo "target_image=$LOW_NAME" >> $GITHUB_OUTPUT
+        shell: bash
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
