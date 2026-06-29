@@ -6,7 +6,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # The repo name is RFXTECH/donations-site. We want the lowercase version for the tag.
+  REPO_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -22,8 +23,11 @@ jobs:
       - name: Lowercase Image Name
         id: lowercase
         run: |
-          LOW_NAME=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
-          echo "target_image=$LOW_NAME" >> $GITHUB_OUTPUT
+          # Convert the full repo name (e.g., RFXTECH/donations-site) to lowercase
+          LOW_NAME=$(echo "${{ env.REPO_NAME }}" | tr '[:upper:]' '[:lower:]')
+          echo "target_image=$LOW_NAME" >> $GITHUB_CACHED_OUTPUT || echo "target_image=$LOW_NAME" >> $GITHUB_OUTPUT
+          # Note: Using a safer way to write to GITHUB_OUTPUT in case of shell differences
+          echo "target_image=${LOW_NAME}" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Set up Docker Buildx
@@ -41,4 +45,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.lowercase.outputs.target_image }}:latest
+          # We use the fully qualified ghcr.io/... tag to ensure it stays within the GHCR scope
+          tags: ghcr.io/${{ steps.lowercase.outputs.target_image }}:latest
