@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: donations-site
+  namespace: default
+  labels:
+    app: donations-site
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: donations-site
+  template:
+    metadata:
+      labels:
+        app: donations-site
+    spec:
+      containers:
+      - name: flask-app
+        image: ghcr.io/rfxtech/donations-site:latest
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - mountPath: /data
+          name: app-data
+      volumes:
+      - name: app-progress
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: donations-site-svc
+  namespace: default
+spec:
+  selector:
+    app: donations-site
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: donations-site-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  tls:
+    - hosts:
+        - donations.rfox.net
+      secretName: wildcard-rfox-net-tls
+  rules:
+    - host: donations.rfox.net
+      http:
+        paths:
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: donations-site-svc
+              port:
+                number: 80
