@@ -1,138 +1,214 @@
-from flask import Flask, render_template_string, request, redirect, url_for, flash
-import datetime
+from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory
+import os
+from datetime import datetime
+import sqlite3
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-app.secret_key = 'super-secret-key'  # Required for flashing messages
 
-# List of donation items or featured opportunities
-ITEMS = [
-    {
-        "name": "RFX Tech Support",
-        "description": "Support our infrastructure and development efforts.",
-        "image_url": "https://via.placeholder.com/300x200?text=RFX+Tech",
-        "date": "2026-01-01"
-    },
-]
+# Configuration - Use /app/data for production (K8s) and local dir for development
+DATA_DIR = '/app/data' if os.path.exists('/app/data') else os.getcwd()
+UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
+DB_PATH = os.path.join(DATA_DIR, 'donations.db')
 
-HTML_TEMPLATE = """<!DOCTYPE html>
+# Ensure directories exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            image_filename TEXT NOT NULL,
+            date_added TIMESTAMP NOT NULL,
+            claimed_by TEXT,
+            is_claimed BOOLEAN DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Donations - RFX</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Donation Gallery - RFX</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 50px; background-color: #f4f4f4; }
-        .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 30px; }
-        .card { background: white; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); width: 300px; overflow: hidden; transition: transform 0.2s; }
-        .card:hover { transform: translateY(-5px); }
-        .card img { width: 100%; height: 200px; object-fit: cover; }
-        .card-content { padding: 15px; text-align: left; }
-        h1 { color: #333; }
-        h3 { margin: 0 0 10px 0; color: #444; }
-        p { color: #666; margin: 0; line-height: 1.4; }
-        .flash { padding: 10px; border-radius: 5px; margin-bottom: 20px; display: inline-block; }
-        .error { background-color: #f8d7da; color: #721c24; }
-        .success { background-color: #d4edda; color: #155724; }
-        form { text-align: left; max-width: 400px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], input[type="date"], textarea { width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background-color: #333; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; width: 100%; }
-        button:hover { background-color: #555; }
+        body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 10px; color: #333; }
+        .container { max-width: 1000px; margin: auto; }
+        header { text-align: center; margin-bottom: 20px; padding: 20px 0; }
+        h1 { color: #1a73e5; font-size: 1.8rem; margin: 0; }
+        .upload-section { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 30px; text-align: center; }
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+        .item-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); transition: transform 0.3s; position: relative; border: 1px solid #eee; }
+        .item-card:hover { transform: translateY(-5px); }
+        .item-end { width: 100%; height: 200px; object-fit: cover; }
+        .item-info { padding: 15px; text-align: center; }
+        .badge { font-size: 0.75rem; padding: 4px 10px; border-radius: 20px; font-weight: bold; display: inline-block; margin-bottom: 10px; }
+        .badge-active { background: #e6f4ea; color: #1e8e3e; }
+        .badge-claimed { background: #e8f0fe; color: #1a73e5; }
+        .countdown { font-size: 0.85rem; color: #d93025; font-weight: bold; margin-top: 10px; }
+        .claim-form { margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px; }
+        .claim-input { width: 85%; padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; text-align: center; }
+        button { background: #1a73e5; color: white; border: none; padding: 12px 25px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: background 0.3s; width: 100%; }
+        button:hover { background: #1557b0; }
+        .claimed-section { margin-top: 50px; border-top: 2px solid #ccc; padding-top: 30px; opacity: 0.8; }
+        .claimed-item { filter: grayscale(0.6); }
+        @media (max-width: 600px) {
+            h1 { font-size: 1.5rem; }
+            body { padding: 5px; }
+            .gallery { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
-    <h1>Support RFX Tech</h1>
-    <p>Thank you for visiting the donations page.</p>
-
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        {% for category, message in messages %}
-          <div class="flash {{ category }}">{{ message }}</div>
-        {% endfor %}
-      {% endif %}
-    {% endwith %}
-
     <div class="container">
-        {% for item in items %}
-        <div class="card">
-            <img src="{{ item.image_url }}" alt="{{ item.name }}">
-            <div class="card-content">
-                <h3 style="margin-bottom: 5px;">{{ item.name }}</h3>
-                <p style="font-size: 0.85em; color: #888; margin-bottom: 10px;">Posted: {{ item.date }}</p>
-                <p>{{ item.description }}</p>
+        <header><h1 style="margin:0;">📦 RFX Donation Gallery</h1><p>Treasures waiting for a new home!</p></header>
+        <section class="upload-section">
+            <h3 style="margin:0 0 20px 0;">Add an Item</h3>
+            <a href="/upload" style="display: inline-block; background: #1a73e5; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold;">Go to Upload Page</a>
+        </section>
+        <h2 style="text-align:center;">Available Treasures</h2>
+        <div class="gallery">
+            {% for item in active_items %}
+            <div class="item-card">
+                <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-end">
+                <div class="item-info">
+                    <span class="badge badge-active">Available</span>
+                    <p style="margin: 5px 0; font-size: 0.85rem;">Added: {{ item.date_added }}</p>
+                    <div class="countdown">{{ get_days_left(item.days_remaining) }}</div>
+                    <form action="/claim/{{ item.id }}" method="post" class="claim-form">
+                        <input type="text" name="username" class="claim-input" placeholder="Your Name" required>
+                        <button type="submit">Claim!</button>
+                    </form>
+                </div>
             </div>
+            {% endfor %}
         </div>
-        {% endfor %}
+        {% if claimed_items %}
+        <section class="claimed-section">
+            <h2 style="text-align:center;">Recently Claimed</h2>
+            <div class="gallery">
+                {% for item in claimed_items %}
+                <div class="item-card claimed-item">
+                    <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-end">
+                    <div class="item-info">
+                        <span class="badge badge-claimed">Claimed</span>
+                        <p style="margin: 5px 0; font-size: 0.85rem;"><strong style="color:#1a73e5;">{{ item.claimed_by }}</strong> grabbed this!</p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
     </div>
-
-    <hr style="margin-top: 50px; border: 0; border-top: 1px solid #ddd;">
-
-    <div style="margin-top: 30px;">
-        <a href="/upload" style="color: #999; text-decoration: none; font-size: 0.8em;">Admin Upload</a>
-    </div>
-
-    <p style="font-size: 0.8em; color: #999; margin-top: 20px;">This site is powered by Kubernetes and Longhorn.</p>
 </body>
-</html>"""
+</html>
+"""
 
-UPLOAD_TEMPLATE = """<!DOCTYPE html>
+UPLOAD_TEMPLATE = """
+<!DOCTYPE html>
 <html lang="en">
-<body style="font-family: sans-serif; text-align: center; padding: 50px; background-color: #f4f4f4;">
-    <h1>Upload New Item</h1>
-    <form method="POST" style="text-align: left; max-width: 400px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
-        <label>Password</label>
-        <input type="text" name="password" required placeholder="Enter password" style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
-
-        <label>Name</label>
-        <input type="text" name="name" required style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
-
-        <label>Date Posted</label>
-        <input type="date" name="date" required style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
-
-        <label>Image URL</label>
-        <input type="text" name="image_url" required placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border: 1px solid #ccc; border-radius: 4px;">
-
-        <label>Description</label>
-        <textarea name="description" rows="4" required style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;"></textarea>
-
-        <button type="submit" style="background-color: #333; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; width: 100%;">Upload Item</button>
-    </form>
-    <br>
-    <a href="/" style="color: #666; text-decoration: none;">&larr; Back to main page</a>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Item - RFX</title>
+    <style>
+        body { font-family: sans:sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; width: 100%; max-width: 400px; }
+        h1 { color: #1a73e5; margin-bottom: 20px; font-size: 1.5rem; }
+        p { color: #666; margin-bottom: 25px; line-height: 1.4; }
+        input[type="file"] { margin-bottom: 20px; width: 100%; font-size: 0.9rem; }
+        button { background: #1a73e5; color: white; border: none; padding: 14px 25px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; transition: background 0.3s; font-size: 1rem; }
+        button:hover { background: #1557b0; }
+        .back { margin-top: 25px; display: block; text-decoration: none; color: #666; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1 style="margin:0;">📦 Upload New Item</h1>
+        <p>Select an image from your device to add it to the gallery.</p>
+        <form action="/upload" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept="image/*" required><br>
+            <button type="submit">Upload Item</button>
+        </form>
+        <a href="/" class="back">← Back to Gallery</a>
+    </div>
 </body>
-</html>"""
+</html>
+"""
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE, items=ITEMS)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor_data = cursor.execute("SELECT * FROM items ORDER BY date_added DESC").fetchall()
+    except Exception:
+        cursor_data = []
+    conn.close()
+
+    active_items = []
+    claimed_items = []
+    now = datetime.now()
+
+    for row in cursor_data:
+        item = dict(row)
+        date_added = datetime.strptime(item['date_added'], '%Y-%m-%d %H:%M:%S')
+        days_old = (now - date_added).days
+        if days_old >= 60: continue
+        item['days_remaining'] = 60 - days_old
+        if item['is_claimed']:
+            claimed_items.append(item)
+        else:
+            active_items.append(item)
+
+    return render_template_string(HTML_TEMPLATE, active_items=active_items, claimed_items=claimed_items)
 
 @app.route('/upload', methods=['GET', 'POST'])
-def upload():
+def upload_page():
     if request.method == 'POST':
-        password = request.form.get('password')
-        if password != 'thefoxes':
-            flash('Incorrect password!', 'error')
-            return redirect(url_for('upload'))
-        
-        name = request.form.get('name')
-        description = request.form.get('description')
-        image_url = request.form.get('image_url')
-        date_str = request.form.get('date')
-        
-        try:
-            datetime.datetime.strptime(date_str, '%Y-%m-%d')
-            new_item = {
-                "name": name,
-                "description": description,
-                "image_url": image_url,
-                "date": date_str
-            }
-            ITEMS.insert(0, new_item)
-            flash('Item uploaded successfully!', 'success')
-        except ValueError:
-            flash('Invalid date format. Please use YYYY-MM-DD.', 'error')
-        return redirect(url_for('index'))
+        if 'file' not in request.files: return redirect(url_for('index'))
+        file = request.files['file']
+        if file.filename == '': return redirect(url_for('index'))
+        if file:
+            filename = secure_filename(file.filename)
+            save_path = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(save_path)
+            conn = get_db_connection()
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            conn.execute("INSERT INTO items (image_filename, date_added) VALUES (?, ?)", (filename, timestamp))
+            conn.commit()
+            conn.close()
+            return redirect(url_for('index'))
 
     return render_template_string(UPLOAD_TEMPLATE)
+
+@app.route('/claim/<int:item_id>', methods=['POST'])
+def claim_item(item_id):
+    username = request.form.get('username')
+    if not username: return "Name is required", 400
+    conn = get_db_connection()
+    conn.execute("UPDATE items SET claimed_by = ?, is_claimed = 1 WHERE id = ?", (username, item_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('index'))
+
+@app.route('/uploads/<filename>')
+def serve_image(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+import flask
+flask.render_template_string.__globals__['get_days_left'] = lambda d: f"{d} days left" if d > 0 else "Expired!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
