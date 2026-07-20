@@ -25,4 +25,5 @@ spec:
           name: app-data
       volumes:
       - name: app-data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: donations-permanent-pvc

@@ -1,0 +1,19 @@
+# Git Ignore for Donations Site
+
+# Ignore the SQLite database
+*.db
+*.sqlite
+
+# Ignore uploaded images
+uploads/
+data/uploads/
+
+# Ignore Python cache and environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Ignore OS junk
+.DS_Store
