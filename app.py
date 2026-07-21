@@ -25,6 +25,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             image_filename TEXT NOT NULL,
+            description TEXT,
             date_added TIMESTAMP NOT NULL,
             claimed_by TEXT,
             is_claimed BOOLEAN DEFAULT 0
@@ -138,6 +139,7 @@ UPLOAD_TEMPLATE = """
         <h1 style="margin:0;">📦 Upload New Item</h1>
         <p>Select an image from your device to add it to the gallery.</p>
         <form action="/upload" method="post" enctype="multipart/form-data">
+            <input type="text" name="description" placeholder="Enter a description" style="width: 100%; padding: 10px; margin-bottom: 20px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;"><br>
             <input type="file" name="file" accept="image/*" required><br>
             <button type="submit">Upload Item</button>
         </form>
@@ -182,11 +184,12 @@ def upload_page():
         if file.filename == '': return redirect(url_for('index'))
         if file:
             filename = secure_filename(file.filename)
+            description = request.form.get('description', '')
             save_path = os.path.join(UPLOAD_FOLDER, filename)
             file.save(save_path)
             conn = get_db_connection()
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            conn.execute("INSERT INTO items (image_filename, date_added) VALUES (?, ?)", (filename, timestamp))
+            conn.execute("INSERT INTO items (image_filename, description, date_added) VALUES (?, ?, ?)", (filename, description, timestamp))
             conn.commit()
             conn.close()
             return redirect(url_for('index'))
