@@ -50,6 +50,21 @@ def init_db():
     conn.commit()
     conn.close()
 
+def get_days_left(days_remaining):
+    return f"{days_remaining} days left" if days_remaining > 0 else "Expired!"
+
+def parse_item_timestamp(raw_value):
+    if isinstance(raw_value, datetime):
+        return raw_value
+
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f'):
+        try:
+            return datetime.strptime(raw_value, fmt)
+        except ValueError:
+            continue
+
+    return datetime.fromisoformat(raw_value)
+
 init_db()
 
 HTML_TEMPLATE = """
@@ -181,7 +196,7 @@ def index():
 
     for row in cursor_data:
         item = dict(row)
-        date_added = datetime.strptime(item['date_added'], '%Y-%m-%d %H:%M:%S')
+        date_added = parse_item_timestamp(item['date_added'])
         days_old = (now - date_added).days
         if days_old >= 60: continue
         item['days_remaining'] = 60 - days_old
@@ -190,7 +205,12 @@ def index():
         else:
             active_items.append(item)
 
-    return render_template_string(HTML_TEMPLATE, active_items=active_items, claimed_items=claimed_items)
+    return render_template_string(
+        HTML_TEMPLATE,
+        active_items=active_items,
+        claimed_items=claimed_items,
+        get_days_left=get_days_left,
+    )
 
 @app.route('/upload', methods=['GET', 'POST'])
 def upload_page():
@@ -217,17 +237,21 @@ def claim_item(item_id):
     username = request.form.get('username')
     if not username: return "Name is required", 400
     conn = get_db_connection()
-    conn.execute("UPDATE items SET claimed_by = ?, is_claimed = 1 WHERE id = ?", (username, item_id))
+    cursor = conn.execute(
+        "UPDATE items SET claimed_by = ?, is_claimed = 1 WHERE id = ? AND COALESCE(is_claimed, 0) = 0",
+        (username, item_id),
+    )
     conn.commit()
     conn.close()
+
+    if cursor.rowcount == 0:
+        return "Item not found or already claimed", 409
+
     return redirect(url_for('index'))
 
 @app.route('/uploads/<filename>')
 def serve_image(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
-
-import flask
-flask.render_template_string.__globals__['get_days_left'] = lambda d: f"{d} days left" if d > 0 else "Expired!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
