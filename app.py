@@ -6,8 +6,13 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-# Configuration - Use /app/data for production (K8s) and local dir for development
-DATA_DIR = '/app/data' if os.path.exists('/app/data') else os.getcwd()
+# Configuration - prefer an explicit env var, then mounted K8s storage, then local dev.
+DATA_DIR = (
+    os.environ.get('DATA_DIR')
+    or ('/data' if os.path.exists('/data') else None)
+    or ('/app/data' if os.path.exists('/app/data') else None)
+    or os.getcwd()
+)
 UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
 DB_PATH = os.path.join(DATA_DIR, 'donations.db')
 
@@ -31,6 +36,17 @@ def init_db():
             is_claimed BOOLEAN DEFAULT 0
         )
     ''')
+
+    existing_columns = {
+        row['name'] for row in conn.execute("PRAGMA table_info(items)").fetchall()
+    }
+    if 'description' not in existing_columns:
+        conn.execute("ALTER TABLE items ADD COLUMN description TEXT")
+    if 'claimed_by' not in existing_columns:
+        conn.execute("ALTER TABLE items ADD COLUMN claimed_by TEXT")
+    if 'is_claimed' not in existing_columns:
+        conn.execute("ALTER TABLE items ADD COLUMN is_claimed BOOLEAN DEFAULT 0")
+
     conn.commit()
     conn.close()
 
