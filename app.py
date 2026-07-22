@@ -198,8 +198,8 @@ def index():
         item = dict(row)
         date_added = parse_item_timestamp(item['date_added'])
         days_old = (now - date_added).days
-        if days_old >= 60: continue
-        item['days_remaining'] = 60 - days_old
+        if days_old >= 30: continue
+        item['days_remaining'] = 30 - days_old
         if item['is_claimed']:
             claimed_items.append(item)
         else:
@@ -209,7 +209,7 @@ def index():
         HTML_TEMPLATE,
         active_items=active_items,
         claimed_items=claimed_items,
-        get_days_left=get_days_left,
+        get_days_left=get_days_left
     )
 
 @app.route('/upload', methods=['GET', 'POST'])
