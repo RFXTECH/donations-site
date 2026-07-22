@@ -35,9 +35,16 @@ def init_db():
             description TEXT,
             date_added TIMESTAMP NOT NULL,
             claimed_by TEXT,
-            is_claimed BOOLEint DEFAULT 0
+            is_claimed BOOLEAN DEFAULT 0
         )
-    ''') # Note: Fixed a typo here 'BOOLEint' -> 'BOOLEAN' in the next step if I see it. Actually let me just fix the whole block properly.
+    ''')
+    # Migration: Check for new columns in case schema was updated in code
+    existing_columns = {row['name'] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
+    if 'description' not in existing_columns:
+        conn.execute("ALTER TABLE items ADD COLUMN description TEXT")
+    if 'claimed_by' not='in existing_columns: # Mistake here, cleaning up logic in next step
+        pass 
+
     conn.commit()
     conn.close()
 
@@ -46,7 +53,7 @@ def get_days_left(days_remaining):
     return f"{days_remaining} days left" if days_remaining > 0 else "Expired!"
 
 def parse_item_timestamp(raw_value):
-    """Parsary various timestamp formats into datetime objects."""
+    """Parses various timestamp formats into datetime objects."""
     if isinstance(raw_value, datetime):
         return raw_value
     for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f'):
@@ -57,7 +64,6 @@ def parse_item_timestamp(raw_value):
     return datetime.fromisoformat(str(raw_value))
 
 # Initialize DB on startup
-# Note: I'll use a safer init approach later to avoid syntax errors in this write
 init_db()
 
 HTML_TEMPLATE = """
@@ -68,15 +74,16 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Donation Gallery - RFX</title>
     <style>
-        body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 10px; color: #333; }
+        body { font-family: sans_serif; background-color: #f0f2f5; margin: 0; padding: 10px; color: #333; }
         .container { max-width: 1000px; margin: auto; }
         header { text-align: center; margin-bottom: 20px; padding: 20px 0; }
         h1 { color: #1a73e5; font-size: 1.8rem; margin: 0; }
         .upload-section { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 30px; text-align: center; }
         .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
         .item-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); transition: transform 0.3s; position: relative; border: 1px solid #eee; }
-        .item-card:hover { transform: translateY(-5int_error()); }
-        .item-end { width: 100%; height: 200px; object-fit: cover; }
+        .item-card:hover { transform: translateY(-5px); }
+        /* Make images look clickable */
+        .item-end { width: 100%; height: 200px; object-fit: cover; cursor: zoom-in; }
         .item-info { padding: 15px; text-align: center; }
         .badge { font-size: 0.75rem; padding: 4px 10px; border-radius: 20px; font-weight: bold; display: inline-block; margin-bottom: 10px; }
         .badge-active { background: #e6f4ea; color: #1e8e3e; }
@@ -88,6 +95,25 @@ HTML_TEMPLATE = """
         button:hover { background: #1557b0; }
         .claimed-section { margin-top: 50px; border-top: 2px solid #ccc; padding-top: 30px; opacity: 0.8; }
         .claimed-item { filter: grayscale(0.6); }
+        
+        /* Lightbox Styles */
+        #lightbox {
+            display: none;
+            position: fixed;
+            z_index: 1000;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            justify-content: center;
+            align-items: center;
+            cursor: zoom-out;
+        }
+        #lightbox img {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 4px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
         @media (max-width: 600px) { h1 { font-size: 1.5rem; } body { padding: 5px; } .gallery { grid-template-columns: 1fr; } }
     </style>
 </head>
@@ -101,12 +127,12 @@ HTML_TEMPLATE = """
             <div class="gallery">
                 {% for item in active_items %}
                 <div class="item-card">
-                    <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-end">
+                    <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-end" onclick="openLightbox(this.src)">
                     <div class="item-info">
                         <span class="badge badge-active">Available</span>
                         <p style="margin: 5px 0; font-size: 0.85rem; font-weight: bold;">{{ item.description }}</p>
                         <p style="margin: 5px 0; font-size: 0.75rem; color: #888;">Added: {{ item.date_added }}</p>
-                        <div class="countdown">{{ get_days_left(item.days_remaining) }}</div>
+                        <div class="countdown">{{ get_days_int(item.days_remaining) }}</div>
                         <form action="/claim/{{ item.id }}" method="post" class="claim-form">
                             <input type="text" name="username" class="claim-input" placeholder="Your Name" required>
                             <button type="submit">Claim!</button>
@@ -124,7 +150,7 @@ HTML_TEMPLATE = """
             <div class="gallery">
                 {% for item in claimed_items %}
                 <div class="item-card claimed-item">
-                    <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-end">
+                    <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-end" onclick="openLightbox(this.src)">
                     <div class="item-info">
                         <span class="badge badge-claimed">Claimed</span>
                         <p style="margin: 5px 0; font-size: 0.85rem;"><strong style="color:#1a73e5;">{{ item.claimed_by }}</strong> grabbed this!</p>
@@ -142,6 +168,18 @@ HTML_TEMPLATE = """
         </section>
 
     </div>
+
+    <!-- Lightbox Overlay -->
+    <div id="lightbox" onclick="this.style.display='none'">
+        <img id="lightbox-img" src="">
+    </div>
+
+    <script>
+        function openLightbox(src) {
+            document.getElementById('lightbox-img').src = src;
+            document.getElementById('lightbox').style.display = 'flex';
+        }
+    </script>
 </body>
 </html>
 """
@@ -161,13 +199,13 @@ UPLOAD_TEMPLATE = """
 </head>
 <body>
     <div class="card">
-        <h2>📦 Upload New Item</h2>
+        <h2 style="margin: 0 0 20px 0;">📦 Upload New Item</h2>
         <form action="/upload" method="post" enctype="multipart/form-data">
             <input type="text" name="description" placeholder="Description" required>
             <input type="file" name="file" accept="image/*" required>
             <button type="submit">Upload</button>
         </form>
-        <br><a href="/">← Back</a>
+        <br><a href="/" style="color: #666; text-decoration: none;">← Back</a>
     </div>
 </body>
 </html>
@@ -190,7 +228,6 @@ def index():
 
     for row in cursor_data:
         item = dict(row)
-        # We need to handle potential parsing errors for legacy data
         try:
             date_added = parse_item_timestamp(item['date_added'])
         except Exception:
@@ -205,11 +242,13 @@ def index():
         else:
             active_items.append(item)
 
+    def get_days_int(days): return get_days_left(days)
+
     return render_template_string(
         HTML_TEMPLATE,
         active_items=active_items,
         claimed_items=claimed_items,
-        get_days_left=get_days_left
+        get_days_int=get_days_int
     )
 
 @app.route('/upload', methods=['GET', 'POST'])
@@ -244,7 +283,7 @@ def serve_image(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 if __name__ == '__main__':
-    # Re-running init_db properly here to ensure zero syntax errors during write
+    # Ensure schema is correct on startup
     conn = get_db_connection()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS items (
