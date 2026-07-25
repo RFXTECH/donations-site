@@ -1,69 +1,55 @@
 from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory
 import os
-from datetime import datetime
 import sqlite3
+from datetime import datetime
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-# Configuration - prefer an explicit env var, then mounted K8s storage, then local dev.
+# Configuration - robust path handling for local and container environments
 DATA_DIR = (
     os.environ.get('DATA_DIR')
     or ('/data' if os.path.exists('/data') else None)
     or ('/app/data' if os.path.exists('/app/data') else None)
     or os.getcwd()
 )
+
+# Ensure DATA_DIR is valid and exists
+if not os.path.exists(DATA_DIR):
+    DATA_DIR = os.getcwd()
+
 UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
 DB_PATH = os.path.join(DATA_DIR, 'donations.db')
 
 # Ensure directories exist on startup
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def get_db_connection():
-    """Provides a connection to the SQLite database with Row factory enabled."""
+def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    """Initializes the database schema and handles migrations for new columns."""
-    conn = get_db_connection()
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS items (
+    """Initializes the database and handles migrations."""
+    with get_db() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             image_filename TEXT NOT NULL,
             description TEXT,
             date_added TIMESTAMP NOT NULL,
             claimed_by TEXT,
             is_claimed BOOLEAN DEFAULT 0
-        )
-    ''')
-    # Migration: Check for new columns in case schema was updated in code
-    existing_columns = {row['name'] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
-    if 'description' not in existing_columns:
-        conn.execute("ALTER TABLE items ADD COLUMN description TEXT")
-    if 'claimed_by' not='in existing_columns: # Mistake here, cleaning up logic in next step
-        pass 
+        )''')
+        # Migrations: Ensure all columns exist
+        existing = {r['name'] for r in conn.execute("PRAGMA table_info(items)").fetchall()}
+        if 'description' not in existing:
+            conn.execute("ALTER TABLE items ADD COLUMN description TEXT")
+        if 'claimed_by' not in existing:
+            conn.execute("ALTER TABLE items ADD COLUMN claimed_by TEXT")
+        if 'is_claimed' not in existing:
+            conn.execute("ALTER TABLE items ADD COLUMN is_claimed BOOLEAN DEFAULT 0")
+        conn.commit()
 
-    conn.commit()
-    conn.close()
-
-def get_days_left(days_remaining):
-    """Returns a user-friendly countdown string."""
-    return f"{days_remaining} days left" if days_remaining > 0 else "Expired!"
-
-def parse_item_timestamp(raw_value):
-    """Parses various timestamp formats into datetime objects."""
-    if isinstance(raw_value, datetime):
-        return raw_value
-    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f'):
-        try:
-            return datetime.strptime(raw_value, fmt)
-        except ValueError:
-            continue
-    return datetime.fromisoformat(str(raw_value))
-
-# Initialize DB on startup
 init_db()
 
 HTML_TEMPLATE = """
@@ -74,111 +60,81 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Donation Gallery - RFX</title>
     <style>
-        body { font-family: sans_serif; background-color: #f0f2f5; margin: 0; padding: 10px; color: #333; }
+        body { font-family: sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
         .container { max-width: 1000px; margin: auto; }
-        header { text-align: center; margin-bottom: 20px; padding: 20px 0; }
-        h1 { color: #1a73e5; font-size: 1.8rem; margin: 0; }
-        .upload-section { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 30px; text-align: center; }
+        header { text-align: center; margin-bottom: 30px; }
+        h1 { color: #1a73e5; }
         .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
-        .item-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); transition: transform 0.3s; position: relative; border: 1px solid #eee; }
+        .item-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; padding: 15px; transition: transform 0.2s; }
         .item-card:hover { transform: translateY(-5px); }
-        /* Make images look clickable */
-        .item-end { width: 100%; height: 200px; object-fit: cover; cursor: zoom-in; }
-        .item-info { padding: 15px; text-align: center; }
-        .badge { font-size: 0.75rem; padding: 4px 10px; border-radius: 20px; font-weight: bold; display: inline-block; margin-bottom: 10px; }
+        .item-img { width: 100%; height: 200px; object-fit: cover; cursor: zoom-in; border-radius: 8px; }
+        #lightbox { display: none; position: fixed; z-index: 1000; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); justify-content: center; align-items: center; cursor: zoom-out; }
+        #lightbox img { max-width: 90%; max-height: 90%; border-radius: 4px; box-shadow: 0 0 20px rgba(255,255,255,0.2); }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font_weight: bold; margin-bottom: 10px; }
         .badge-active { background: #e6f4ea; color: #1e8e3e; }
         .badge-claimed { background: #e8f0fe; color: #1a73e5; }
-        .countdown { font-size: 0.85rem; color: #d93025; font-weight: bold; margin-top: 10px; }
         .claim-form { margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px; }
-        .claim-input { width: 85%; padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; text-align: center; }
-        button { background: #1a73e5; color: white; border: none; padding: 12px 25px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: background 0.3s; width: 100%; }
-        button:hover { background: #1557b0; }
-        .claimed-section { margin-top: 50px; border-top: 2px solid #ccc; padding-top: 30px; opacity: 0.8; }
-        .claimed-item { filter: grayscale(0.6); }
-        
-        /* Lightbox Styles */
-        #lightbox {
-            display: none;
-            position: fixed;
-            z_index: 1000;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.85);
-            justify-content: center;
-            align-items: center;
-            cursor: zoom-out;
-        }
-        #lightbox img {
-            max-width: 90%;
-            max-height: 90%;
-            border-radius: 4px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
-        }
-
-        @media (max-width: 600px) { h1 { font-size: 1.5rem; } body { padding: 5px; } .gallery { grid-template-columns: 1fr; } }
+        .claim-input { width: 80%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 10px; text-align: center; }
+        button { background: #1a73e5; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; }
+        button:hover { background: #155:7b0; }
+        .claimed-section { margin-top: 50px; opacity: 0.8; border-top: 2px solid #ccc; padding-top: 30px; }
+        .claimed-item { filter: grayscale(0.5); }
     </style>
 </head>
 <body>
     <div class="container">
         <header><h1 style="margin:0;">📦 RFX Donation Gallery</h1><p>Treasures waiting for a new home!</p></header>
-        
-        <!-- MAIN GALLERY SECTION -->
-        <section class="gallery-section">
+        <section>
             <h2 style="text-align:center;">Available Treasures</h2>
             <div class="gallery">
                 {% for item in active_items %}
                 <div class="item-card">
-                    <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-end" onclick="openLightbox(this.src)">
-                    <div class="item-info">
+                    <a href="{{ url_for('serve_image', filename=item.image_filename) }}" class="lightbox-trigger">
+                        <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-img">
+                    </a>
+                    <div style="margin-top:10px;">
                         <span class="badge badge-active">Available</span>
-                        <p style="margin: 5px 0; font-size: 0.85rem; font-weight: bold;">{{ item.description }}</p>
-                        <p style="margin: 5px 0; font-size: 0.75rem; color: #888;">Added: {{ item.date_added }}</p>
-                        <div class="countdown">{{ get_days_int(item.days_remaining) }}</div>
-                        <form action="/claim/{{ item.id }}" method="post" class="claim-form">
-                            <input type="text" name="username" class="claim-input" placeholder="Your Name" required>
-                            <button type="submit">Claim!</button>
-                        </form>
+                        <p><strong>{{ item.description or 'No description' }}</strong></p>
+                        <p style="font-size: 0.8rem; color: #666;">Added: {{ item:date_added }}</p>
                     </div>
+                    <form action="{{ url_for('claim_item', item_id=item.id) }}" method="post" class="claim-form">
+                        <input type="text" name="username" class="claim-input" placeholder="Your Name" required>
+                        <button type="submit">Claim!</button>
+                    </form>
                 </div>
                 {% endfor %}
             </div>
         </section>
-
-        <!-- CLAIMED SECTION -->
         {% if claimed_items %}
         <section class="claimed-section">
             <h2 style="text-align:center;">Recently Claimed</h2>
             <div class="gallery">
                 {% for item in claimed_items %}
                 <div class="item-card claimed-item">
-                    <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-end" onclick="openLightbox(this.src)">
-                    <div class="item-info">
-                        <span class="badge badge-claimed">Claimed</span>
-                        <p style="margin: 5px 0; font-size: 0.85rem;"><strong style="color:#1a73e5;">{{ item.claimed_by }}</strong> grabbed this!</p>
-                    </div>
+                    <a href="{{ url_for('serve_image', filename=item.image_filename) }}" class="lightbox-trigger">
+                        <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-img">
+                    </a>
+                    <p style="margin-top:10px;">Claimed by: <strong>{{ item.claimed_by }}</strong></p>
                 </div>
                 {% endfor %}
             </div>
         </section>
         {% endif %}
-
-        <!-- UPLOAD SECTION (NOW AT BOTTOM) -->
-        <section class="upload-section" style="margin-top: 50px; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center;">
-            <h3 style="margin:0 0 20px 0;">Add an Item</h3>
-            <a href="/upload" style="display: inline-block; background: #1a73e5; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold;">Go to Upload Page</a>
-        </section>
-
+        <div style="text-align:center; margin-top:40px;"><a href="/upload" style="color:#1a73e5; font-weight:bold;">Add an Item</a></div>
     </div>
-
-    <!-- Lightbox Overlay -->
     <div id="lightbox" onclick="this.style.display='none'">
         <img id="lightbox-img" src="">
     </div>
-
     <script>
-        function openLightbox(src) {
-            document.getElementById('lightbox-img').src = src;
-            document.getElementById('lightbox').style.display = 'flex';
-        }
+        document.querySelectorAll('.lightbox-trigger').forEach(el => {
+            el.onclick = (e) => {
+                e.preventDefault();
+                const lightbox = document.getElementById('lightbox');
+                const img = document.getElementById('lightbox-img');
+                img.src = el.href;
+                lightbox.style.display = 'flex';
+            };
+        });
     </script>
 </body>
 </html>
@@ -188,24 +144,23 @@ UPLOAD_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Upload Item - RFX</title>
+    <meta charset="UTF-8"><title>Upload Item - RFX</title>
     <style>
-        body { font-family: sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
-        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; width: 100%; max-width: 400px; }
-        input { margin-bottom: 15px; width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;}
-        button { background: #1a73e5; color: white; border: none; padding: 12px 25px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; }
+        body { font-family: sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 400px; margin: auto; text-align: center; }
+        input { width: 100%; margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        button { background: #1a73e5; color: white; border: none; padding: 12px; width: 100%; border-radius: 6px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2 style="margin: 0 0 20px 0;">📦 Upload New Item</h2>
-        <form action="/upload" method="post" enctype="multipart/form-data">
+        <h2 style="margin:0;">📦 Upload Item</h2>
+        <form method="post" enctype="multipart/form-data">
             <input type="text" name="description" placeholder="Description" required>
             <input type="file" name="file" accept="image/*" required>
             <button type="submit">Upload</button>
         </form>
-        <br><a href="/" style="color: #666; text-decoration: none;">← Back</a>
+        <p><a href="/" style="color:#666;">&larr; Back</a></p>
     </div>
 </body>
 </html>
@@ -213,69 +168,33 @@ UPLOAD_TEMPLATE = """
 
 @app.route('/')
 def index():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor_data = cursor.execute("SELECT * FROM items ORDER BY date_added DESC").fetchall()
-    except Exception as e:
-        print(f"Error querying DB: {e}")
-        cursor_data = []
-    conn.close()
-
-    active_items = []
-    claimed_items = []
-    now = datetime.now()
-
-    for row in cursor_data:
-        item = dict(row)
-        try:
-            date_added = parse_item_timestamp(item['date_added'])
-        except Exception:
-            date_added = now
-            
-        days_old = (now - date_added).days
-        if days_old >= 30: continue
-        
-        item['days_remaining'] = 30 - days_old
-        if item.get('is_claimed'):
-            claimed_items.append(item)
-        else:
-            active_items.append(item)
-
-    def get_days_int(days): return get_days_left(days)
-
-    return render_template_string(
-        HTML_TEMPLATE,
-        active_items=active_items,
-        claimed_items=claimed_items,
-        get_days_int=get_days_int
-    )
+    with get_db() as conn:
+        items = conn.execute("SELECT * FROM items ORDER BY date_added DESC").fetchall()
+    active = [dict(i) for i in items if not i['is_claimed']]
+    claimed = [dict(i) for i in items if i['is_claimed']]
+    return render_template_string(HTML_TEMPLATE, active_items=active, claimed_items=claimed)
 
 @app.route('/upload', methods=['GET', 'POST'])
-def upload_page():
+def upload():
     if request.method == 'POST':
         file = request.files.get('file')
         desc = request.form.get('description', '')
         if file and file.filename:
-            filename = secure_filename(file.filename)
-            save_path = os.path.join(UPLOAD_FOLDER, filename)
-            file.save(save_path)
-            conn = get_db_connection()
-            conn.execute("INSERT INTO items (image_filename, description, date_added) VALUES (?, ?, ?)", 
-                         (filename, desc, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-            conn.commit()
-            conn.close()
+            fn = secure_filename(file.filename)
+            file.save(os.path.join(UPLOAD_FOLDER, fn))
+            with get_db() as conn:
+                conn.execute("INSERT INTO items (image_filename, description, date_added) VALUES (?, ?, ?)",
+                             (fn, desc, datetime.now().strftime('%Y-%m_d %H:%M:%S')))
+                conn.commit()
             return redirect(url_for('index'))
     return render_template_string(UPLOAD_TEMPLATE)
 
 @app.route('/claim/<int:item_id>', methods=['POST'])
 def claim_item(item_id):
-    username = request.form.get('username')
-    if not username: return "Name is required", 400
-    conn = get_db_connection()
-    cursor = conn.execute("UPDATE items SET claimed_by=?, is_claimed=1 WHERE id=? AND is_claimed=0", (username, item_id))
-    conn.commit()
-    conn.close()
+    user = request.form.get('username', 'Anonymous')
+    with get_db() as conn:
+        conn.execute("UPDATE items SET claimed_by = ?, is_claimed = 1 WHERE id = ?", (user, item_id))
+        conn.commit()
     return redirect(url_for('index'))
 
 @app.route('/uploads/<filename>')
@@ -283,18 +202,4 @@ def serve_image(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 if __name__ == '__main__':
-    # Ensure schema is correct on startup
-    conn = get_db_connection()
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            image_filename TEXT NOT NULL,
-            description TEXT,
-            date_added TIMESTAMP NOT NULL,
-            claimed_by TEXT,
-            is_claimed BOOLEAN DEFAULT 0
-        )
-    ''')
-    conn.commit()
-    conn.close()
     app.run(host='0.0.0.0', port=8080)
