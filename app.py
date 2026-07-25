@@ -95,7 +95,7 @@ HTML_TEMPLATE = """
                     <div style="margin-top:10px;">
                         <span class="badge badge-active">Available</span>
                         <p><strong>{{ item.description or 'No description' }}</strong></p>
-                        <p style="font-size: 0.8rem; color: #666;">Added: {{ item:date_added }}</p>
+                        <p style="font-size: 0.8rem; color: #666;">Added: {{ item.date_added }}</p>
                     </div>
                     <form action="{{ url_for('claim_item', item_id=item.id) }}" method="post" class="claim-form">
                         <input type="text" name="username" class="claim-input" placeholder="Your Name" required>
