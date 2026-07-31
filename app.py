@@ -27,6 +27,9 @@ ALLOWED_ADMIN_CIDRS = [cidr.strip() for cidr in os.environ.get('ALLOWED_ADMIN_CI
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ITEM_LIFETIME_DAYS = 30
+APP_VERSION = os.environ.get('APP_VERSION') or 'dev'
+BUILD_SHA = os.environ.get('BUILD_SHA') or os.environ.get('GIT_SHA') or 'unknown'
+BUILD_TIME = os.environ.get('BUILD_TIME') or 'unknown'
 
 
 def get_db():
@@ -159,6 +162,14 @@ def load_items():
     return rows
 
 
+def version_context():
+    return {
+        'app_version': APP_VERSION,
+        'build_sha': BUILD_SHA,
+        'build_time': BUILD_TIME,
+    }
+
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -189,6 +200,7 @@ HTML_TEMPLATE = """
         .claimed-item { filter: grayscale(0.5); }
         .admin-link { display: inline-block; margin-top: 12px; color: #666; font-size: 0.85rem; text-decoration: none; }
         .admin-link:hover { text-decoration: underline; }
+        .footer-meta { text-align: center; margin-top: 12px; color: #888; font-size: 0.82rem; }
     </style>
 </head>
 <body>
@@ -237,7 +249,9 @@ HTML_TEMPLATE = """
         <div style="text-align:center; margin-top:20px; display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
             <a href="/upload" style="color:#1a73e5; font-weight:bold;">Add an Item</a>
             <a href="/given-to-goodwill" style="color:#1a73e5; font-weight:bold;">Given to Goodwill</a>
+            <a href="/version" style="color:#1a73e5; font-weight:bold;">Version</a>
         </div>
+        <div class="footer-meta">Live version: <a href="/version">{{ app_version }}</a></div>
     </div>
     <div id="lightbox" onclick="this.style.display='none'">
         <img id="lightbox-img" src="">
@@ -296,13 +310,42 @@ GOODWILL_TEMPLATE = """
                         <p><strong>{{ item.description or 'No description' }}</strong></p>
                         <p class="muted" style="font-size: 0.8rem;">Added: {{ item.date_added }}</p>
                         <p class="muted" style="font-size: 0.8rem;">Expired on: {{ item.expired_on or '—' }}</p>
-                        <p class="muted" style="font-size: 0.8rem;">Expired on: {{ item.expired_on or '—' }}</p>
                     </div>
                 </div>
                 {% endfor %}
             </div>
         </section>
         <div class="toplinks"><a href="/" style="color:#1a73e5; font-weight:bold;">Back to gallery</a></div>
+    </div>
+</body>
+</html>
+"""
+
+VERSION_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Version - RFX Donations</title>
+    <style>
+        body { font-family: sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 520px; margin: auto; }
+        .row { display:flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid #eee; }
+        .row:last-child { border-bottom: 0; }
+        .label { color: #666; }
+        .value { font-weight: bold; word-break: break-word; text-align: right; }
+        .muted { color: #777; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2 style="margin-top:0;">Live version</h2>
+        <p class="muted">This page shows what’s currently deployed.</p>
+        <div class="row"><div class="label">App version</div><div class="value">{{ app_version }}</div></div>
+        <div class="row"><div class="label">Build SHA</div><div class="value">{{ build_sha }}</div></div>
+        <div class="row"><div class="label">Build time</div><div class="value">{{ build_time }}</div></div>
+        <p><a href="/" style="color:#1a73e5; font-weight:bold;">&larr; Back to gallery</a></p>
     </div>
 </body>
 </html>
@@ -423,6 +466,11 @@ def given_to_goodwill():
     now = datetime.now()
     archived = [item for item in items if item.get('is_expired') or (item.get('is_claimed') and not item_is_active(item, now))]
     return render_template_string(GOODWILL_TEMPLATE, archived_items=archived)
+
+
+@app.route('/version')
+def version_page():
+    return render_template_string(VERSION_TEMPLATE, **version_context())
 
 
 @app.route('/upload', methods=['GET', 'POST'])
