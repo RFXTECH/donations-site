@@ -75,3 +75,4 @@ def test_expired_item_moves_to_goodwill_page(client, db_path):
     assert b"Expired item" not in home.data
     assert b"Expired item" in archive.data
     assert b"Given to Goodwill" in archive.data
+    assert b"Expired on:" in archive.data

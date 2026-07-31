@@ -116,6 +116,13 @@ def item_expires_at(item):
     return added + timedelta(days=ITEM_LIFETIME_DAYS)
 
 
+def item_expired_on(item):
+    expires_at = item_expires_at(item)
+    if expires_at is None:
+        return None
+    return expires_at.strftime('%Y-%m-%d %H:%M')
+
+
 def item_expiry_label(item, now=None):
     now = now or datetime.now()
     expires_at = item_expires_at(item)
@@ -146,6 +153,7 @@ def load_items():
     now = datetime.now()
     for item in rows:
         item['expires_at'] = item_expires_at(item)
+        item['expired_on'] = item_expired_on(item)
         item['expiry_label'] = item_expiry_label(item, now)
         item['is_expired'] = bool(item['expires_at'] and item['expires_at'] <= now)
     return rows
@@ -287,6 +295,8 @@ GOODWILL_TEMPLATE = """
                         <span class="badge badge-expired">{{ item.expiry_label }}</span>
                         <p><strong>{{ item.description or 'No description' }}</strong></p>
                         <p class="muted" style="font-size: 0.8rem;">Added: {{ item.date_added }}</p>
+                        <p class="muted" style="font-size: 0.8rem;">Expired on: {{ item.expired_on or '—' }}</p>
+                        <p class="muted" style="font-size: 0.8rem;">Expired on: {{ item.expired_on or '—' }}</p>
                     </div>
                 </div>
                 {% endfor %}
