@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: donations-sqlite-web
+  namespace: default
+  labels:
+    app: donations-sqlite-web
+spec:
+  type: ClusterIP
+  selector:
+    app: donations-sqlite-web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: donations-sqlite-web
+  namespace: default
+  labels:
+    app: donations-sqlite-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: donations-sqlite-web
+  template:
+    metadata:
+      labels:
+        app: donations-sqlite-web
+    spec:
+      containers:
+        - name: sqlite-web
+          image: coleifer/sqlite-web:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sqlite_web
+          args:
+            - /data/donations.db
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: app-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: app-data
+          persistentVolumeClaim:
+            claimName: donations-permanent-pvc
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: donations-sqlite-web
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/whitelist-source-range: 192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
+spec:
+  tls:
+    - hosts:
+        - donations-db.rfox.net
+      secretName: wildcard-rfox-net-tls
+  rules:
+    - host: donations-db.rfox.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: donations-sqlite-web
+                port:
+                  number: 8080
