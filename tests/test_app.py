@@ -58,7 +58,7 @@ def test_item_expiry_label_formats_countdown():
     assert "Expires in" in label
 
 
-def test_expired_item_is_hidden_from_homepage(client, db_path):
+def test_expired_item_moves_to_goodwill_page(client, db_path):
     with app.app_context():
         with get_db() as conn:
             conn.execute(
@@ -67,6 +67,11 @@ def test_expired_item_is_hidden_from_homepage(client, db_path):
             )
             conn.commit()
 
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert b"Expired item" not in resp.data
+    home = client.get("/")
+    archive = client.get("/given-to-goodwill")
+
+    assert home.status_code == 200
+    assert archive.status_code == 200
+    assert b"Expired item" not in home.data
+    assert b"Expired item" in archive.data
+    assert b"Given to Goodwill" in archive.data
