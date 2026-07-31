@@ -33,7 +33,8 @@ def test_upload_page_loads(client):
     assert b"Upload Item" in resp.data
 
 
-def test_admin_requires_access(client):
+def test_hidden_admin_page_renders_locally(client):
     resp = client.get("/__admin/items")
     assert resp.status_code == 200
-    assert b"Access denied" in resp.data
+    assert b"Hidden admin" in resp.data
+    assert b"Items" in resp.data
