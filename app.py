@@ -226,7 +226,10 @@ HTML_TEMPLATE = """
             </div>
         </section>
         {% endif %}
-        <div style="text-align:center; margin-top:40px;"><a href="/upload" style="color:#1a73e5; font-weight:bold;">Add an Item</a></div>
+        <div style="text-align:center; margin-top:20px; display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
+            <a href="/upload" style="color:#1a73e5; font-weight:bold;">Add an Item</a>
+            <a href="/given-to-goodwill" style="color:#1a73e5; font-weight:bold;">Given to Goodwill</a>
+        </div>
     </div>
     <div id="lightbox" onclick="this.style.display='none'">
         <img id="lightbox-img" src="">
@@ -242,6 +245,55 @@ HTML_TEMPLATE = """
             };
         });
     </script>
+</body>
+</html>
+"""
+
+GOODWILL_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Given to Goodwill - RFX</title>
+    <style>
+        body { font-family: sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 1000px; margin: auto; }
+        header { text-align: center; margin-bottom: 30px; }
+        h1 { color: #1a73e5; }
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+        .item-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; padding: 15px; }
+        .item-img { width: 100%; height: 200px; object-fit: cover; border-radius: 8px; }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; margin-bottom: 10px; }
+        .badge-goodwill { background: #eef2ff; color: #4338ca; }
+        .badge-expired { background: #fff7e6; color: #b45309; }
+        .muted { color: #666; }
+        .toplinks { text-align:center; margin-top: 24px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1 style="margin:0;">Given to Goodwill</h1>
+            <p>Items that stayed for 30 days and moved on.</p>
+        </header>
+        <section>
+            <div class="gallery">
+                {% for item in archived_items %}
+                <div class="item-card">
+                    <img src="{{ url_for('serve_image', filename=item.image_filename) }}" class="item-img">
+                    <div style="margin-top:10px;">
+                        <span class="badge badge-goodwill">Given to Goodwill</span>
+                        <span class="badge badge-expired">{{ item.expiry_label }}</span>
+                        <p><strong>{{ item.description or 'No description' }}</strong></p>
+                        <p class="muted" style="font-size: 0.8rem;">Added: {{ item.date_added }}</p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        <div class="toplinks"><a href="/" style="color:#1a73e5; font-weight:bold;">Back to gallery</a></div>
+    </div>
 </body>
 </html>
 """
@@ -354,6 +406,14 @@ def index():
     active = [item for item in items if item_is_active(item, now)]
     claimed = [item for item in items if item.get('is_claimed') and not item.get('is_expired')]
     return render_template_string(HTML_TEMPLATE, active_items=active, claimed_items=claimed)
+
+@app.route('/given-to-goodwill')
+def given_to_goodwill():
+    items = load_items()
+    now = datetime.now()
+    archived = [item for item in items if item.get('is_expired') or (item.get('is_claimed') and not item_is_active(item, now))]
+    return render_template_string(GOODWILL_TEMPLATE, archived_items=archived)
+
 
 @app.route('/upload', methods=['GET', 'POST'])
 def upload():
