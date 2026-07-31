@@ -1,7 +1,7 @@
 from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory, abort
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -25,6 +25,9 @@ ALLOWED_ADMIN_CIDRS = [cidr.strip() for cidr in os.environ.get('ALLOWED_ADMIN_CI
 
 # Ensure directories exist on startup
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+ITEM_LIFETIME_DAYS = 30
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -93,6 +96,61 @@ def admin_allowed() -> bool:
     return _is_private_ip(_request_ip())
 
 
+def parse_item_date(value):
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f'):
+        try:
+            return datetime.strptime(str(value), fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def item_expires_at(item):
+    added = parse_item_date(item.get('date_added'))
+    if added is None:
+        return None
+    return added + timedelta(days=ITEM_LIFETIME_DAYS)
+
+
+def item_expiry_label(item, now=None):
+    now = now or datetime.now()
+    expires_at = item_expires_at(item)
+    if expires_at is None:
+        return 'Unknown'
+    remaining = expires_at - now
+    if remaining.total_seconds() <= 0:
+        return 'Expired'
+    total_minutes = int(remaining.total_seconds() // 60)
+    days, rem_minutes = divmod(total_minutes, 60 * 24)
+    hours, minutes = divmod(rem_minutes, 60)
+    if days > 0:
+        return f'Expires in {days}d {hours}h'
+    if hours > 0:
+        return f'Expires in {hours}h {minutes}m'
+    return f'Expires in {max(minutes, 1)}m'
+
+
+def item_is_active(item, now=None):
+    now = now or datetime.now()
+    expires_at = item_expires_at(item)
+    return expires_at is not None and expires_at > now and not item.get('is_claimed')
+
+
+def load_items():
+    with get_db() as conn:
+        rows = [dict(i) for i in conn.execute("SELECT * FROM items ORDER BY date_added DESC").fetchall()]
+    now = datetime.now()
+    for item in rows:
+        item['expires_at'] = item_expires_at(item)
+        item['expiry_label'] = item_expiry_label(item, now)
+        item['is_expired'] = bool(item['expires_at'] and item['expires_at'] <= now)
+    return rows
+
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -114,6 +172,7 @@ HTML_TEMPLATE = """
         .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; margin-bottom: 10px; }
         .badge-active { background: #e6f4ea; color: #1e8e3e; }
         .badge-claimed { background: #e8f0fe; color: #1a73e5; }
+        .badge-expiring { background: #fff7e6; color: #b45309; }
         .claim-form { margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px; }
         .claim-input { width: 80%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 10px; text-align: center; }
         button { background: #1a73e5; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; }
@@ -140,6 +199,7 @@ HTML_TEMPLATE = """
                     </a>
                     <div style="margin-top:10px;">
                         <span class="badge badge-active">Available</span>
+                        <span class="badge badge-expiring">{{ item.expiry_label }}</span>
                         <p><strong>{{ item.description or 'No description' }}</strong></p>
                         <p style="font-size: 0.8rem; color: #666;">Added: {{ item.date_added }}</p>
                     </div>
@@ -270,7 +330,7 @@ ADMIN_TEMPLATE = """
                         <td>{{ item.image_filename }}</td>
                         <td>{{ item.description or '—' }}</td>
                         <td>{{ 'Claimed by ' ~ item.claimed_by if item.is_claimed else 'Available' }}</td>
-                        <td>{{ item.date_added }}</td>
+                        <td>{{ item.date_added }}<br><span class="muted">{{ item.expiry_label }}</span></td>
                         <td>
                             <form method="post" action="{{ url_for('admin_delete_item', item_id=item.id) }}" onsubmit="return confirm('Delete this item and its image?');">
                                 <button class="danger" type="submit">Delete</button>
@@ -289,10 +349,10 @@ ADMIN_TEMPLATE = """
 
 @app.route('/')
 def index():
-    with get_db() as conn:
-        items = conn.execute("SELECT * FROM items ORDER BY date_added DESC").fetchall()
-    active = [dict(i) for i in items if not i['is_claimed']]
-    claimed = [dict(i) for i in items if i['is_claimed']]
+    items = load_items()
+    now = datetime.now()
+    active = [item for item in items if item_is_active(item, now)]
+    claimed = [item for item in items if item.get('is_claimed') and not item.get('is_expired')]
     return render_template_string(HTML_TEMPLATE, active_items=active, claimed_items=claimed)
 
 @app.route('/upload', methods=['GET', 'POST'])
@@ -313,7 +373,14 @@ def upload():
 @app.route('/claim/<int:item_id>', methods=['POST'])
 def claim_item(item_id):
     user = request.form.get('username', 'Anonymous')
+    now = datetime.now()
     with get_db() as conn:
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        if row is None:
+            return redirect(url_for('index'))
+        item = dict(row)
+        if not item_is_active(item, now):
+            return redirect(url_for('index'))
         conn.execute("UPDATE items SET claimed_by = ?, is_claimed = 1 WHERE id = ?", (user, item_id))
         conn.commit()
     return redirect(url_for('index'))
@@ -327,8 +394,7 @@ def admin_items():
     allowed = admin_allowed()
     items = []
     if allowed:
-        with get_db() as conn:
-            items = [dict(i) for i in conn.execute("SELECT * FROM items ORDER BY date_added DESC").fetchall()]
+        items = load_items()
     return render_template_string(ADMIN_TEMPLATE, allowed=allowed, items=items)
 
 @app.route('/__admin/items/<int:item_id>/delete', methods=['POST'])
