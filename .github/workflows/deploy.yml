@@ -65,3 +65,7 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/${{ steps.lowercase.outputs.target_image }}:latest
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+            BUILD_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.run_started_at }}

@@ -38,6 +38,7 @@ def test_homepage_loads(client):
     assert resp.status_code == 200
     assert b"Donation Gallery" in resp.data
     assert b"Version" in resp.data
+    assert b"Live version" in resp.data
 
 
 def test_upload_page_loads(client):
@@ -51,6 +52,7 @@ def test_version_page_loads(client):
     assert resp.status_code == 200
     assert b"Live version" in resp.data
     assert b"Build SHA" in resp.data
+    assert b"dev" in resp.data
 
 
 def test_hidden_admin_page_renders_locally(client):
