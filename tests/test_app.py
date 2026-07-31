@@ -37,12 +37,20 @@ def test_homepage_loads(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert b"Donation Gallery" in resp.data
+    assert b"Version" in resp.data
 
 
 def test_upload_page_loads(client):
     resp = client.get("/upload")
     assert resp.status_code == 200
     assert b"Upload Item" in resp.data
+
+
+def test_version_page_loads(client):
+    resp = client.get("/version")
+    assert resp.status_code == 200
+    assert b"Live version" in resp.data
+    assert b"Build SHA" in resp.data
 
 
 def test_hidden_admin_page_renders_locally(client):
